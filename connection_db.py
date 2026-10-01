@@ -6,6 +6,7 @@ Running this file directly will test the connection and create the schema.
 import os
 import sys
 import logging
+import threading
 from urllib.parse import quote_plus
 
 from dotenv import load_dotenv
@@ -58,30 +59,30 @@ def _build_url() -> str:
 # Engine (singleton)
 # ------------------------------------------------------------------
 _engine: Engine | None = None
+_engine_lock = threading.Lock()
+
 
 def get_engine() -> Engine:
     global _engine
     if _engine is None:
-        url = _build_url()
-        # Mask the password when logging
-        safe_url = url.split("@")[-1] if "@" in url else url
-        logger.info("Engine created for %s@%s/%s",
-                    os.getenv("DB_USER"), os.getenv("DB_HOST"),
-                    os.getenv("DB_NAME"))
-        _engine = create_engine(
-            url,
-            pool_size=5,
-            max_overflow=10,
-            pool_recycle=3600,
-            pool_pre_ping=True,
-            future=True,
-            echo=False,
-            connect_args={
-                # Local dev only — remove for remote/cloud DBs
-                "ssl_disabled": True,
-		"auth_plugin": "mysql_native_password",
-            },
-        )
+        with _engine_lock:
+            if _engine is None:              # double-checked locking
+                _engine = create_engine(
+                    _build_url(),
+                    pool_size=5,
+                    max_overflow=10,
+                    pool_recycle=3600,
+                    pool_pre_ping=True,
+                    future=True,
+                    echo=False,
+                    connect_args={
+                        "ssl_disabled": True,
+                        "auth_plugin": "mysql_native_password",
+                    },
+                )
+                logger.info("Engine created for %s@%s/%s",
+                            os.getenv("DB_USER"), os.getenv("DB_HOST"),
+                            os.getenv("DB_NAME"))
     return _engine
 
 
