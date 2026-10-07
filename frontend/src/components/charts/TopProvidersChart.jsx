@@ -1,49 +1,37 @@
 import { useEffect, useState } from "react";
 import {
-  ResponsiveContainer,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  Tooltip,
-  CartesianGrid,
+  ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid,
 } from "recharts";
 import { api } from "../../api/client";
 import Card from "../ui/Card";
 import Spinner from "../ui/Spinner";
 import ErrorBanner from "../ui/ErrorBanner";
-import { formatCurrencyCompact, formatNumber } from "../ui/format";
+import { formatCurrencyCompact } from "../ui/format";
+import { useChartTheme } from "../../hooks/useChartTheme";
 
 export default function TopProvidersChart({ filters }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const t = useChartTheme();
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-
-    api
-      .topProviders(filters)
+    api.topProviders(filters)
       .then((rows) => !cancelled && setData(rows))
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [filters]);
 
   return (
-    <Card
-      title="Top 10 Providers by Claim Value"
-      subtitle="Highest-value providers in view"
-    >
+    <Card title="Top 10 Providers by Claim Value" subtitle="Highest-value providers in view">
       {loading && <Spinner />}
       {error && <ErrorBanner message={error} />}
       {!loading && !error && data.length === 0 && (
-        <p className="text-sm text-slate-400 py-8 text-center">
+        <p className="text-sm text-slate-400 dark:text-slate-500 py-8 text-center">
           No providers match the current filters.
         </p>
       )}
@@ -54,10 +42,10 @@ export default function TopProvidersChart({ filters }) {
             layout="vertical"
             margin={{ top: 4, right: 24, left: 8, bottom: 4 }}
           >
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
+            <CartesianGrid strokeDasharray="3 3" stroke={t.grid} horizontal={false} />
             <XAxis
               type="number"
-              tick={{ fontSize: 11, fill: "#64748b" }}
+              tick={{ fontSize: 11, fill: t.axisText }}
               tickFormatter={(v) => formatCurrencyCompact(v)}
               axisLine={false}
               tickLine={false}
@@ -66,31 +54,30 @@ export default function TopProvidersChart({ filters }) {
               type="category"
               dataKey="provider_name"
               width={160}
-              tick={{ fontSize: 11, fill: "#334155" }}
+              tick={{ fontSize: 11, fill: t.axisTextStrong }}
               tickLine={false}
               axisLine={false}
             />
             <Tooltip
               contentStyle={{
+                backgroundColor: t.tooltipBg,
+                border: `1px solid ${t.tooltipBorder}`,
+                color: t.tooltipText,
                 borderRadius: 8,
-                border: "1px solid #e2e8f0",
                 fontSize: 12,
               }}
-              formatter={(value, name) => {
-                if (name === "total_claimed")
-                  return [formatCurrencyCompact(value), "Claimed"];
-                return [value, name];
-              }}
+              labelStyle={{ color: t.tooltipText }}
+              formatter={(value, name) =>
+                name === "total_claimed"
+                  ? [formatCurrencyCompact(value), "Claimed"]
+                  : [value, name]
+              }
               labelFormatter={(label, payload) => {
                 const row = payload?.[0]?.payload;
                 return row ? `${label} · ${row.specialty}` : label;
               }}
             />
-            <Bar
-              dataKey="total_claimed"
-              fill="#0ea5e9"
-              radius={[0, 4, 4, 0]}
-            />
+            <Bar dataKey="total_claimed" fill={t.sky} radius={[0, 4, 4, 0]} />
           </BarChart>
         </ResponsiveContainer>
       )}

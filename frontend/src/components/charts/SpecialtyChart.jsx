@@ -9,7 +9,7 @@ import ErrorBanner from "../ui/ErrorBanner";
 import { formatCurrencyCompact, formatNumber } from "../ui/format";
 import { useChartTheme } from "../../hooks/useChartTheme";
 
-export default function StateChart({ filters }) {
+export default function SpecialtyChart({ filters }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -19,26 +19,20 @@ export default function StateChart({ filters }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    api.state(filters)
-      .then((rows) => {
-        if (cancelled) return;
-        const top10 = [...rows]
-          .sort((a, b) => (b.total_claimed || 0) - (a.total_claimed || 0))
-          .slice(0, 10);
-        setData(top10);
-      })
+    api.specialty(filters)
+      .then((rows) => !cancelled && setData(rows))
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
   }, [filters]);
 
   return (
-    <Card title="Claims by State" subtitle="Top 10 states by total claimed value">
+    <Card title="Claims by Specialty" subtitle="Provider specialties ranked by claim volume">
       {loading && <Spinner />}
       {error && <ErrorBanner message={error} />}
       {!loading && !error && data.length === 0 && (
         <p className="text-sm text-slate-400 dark:text-slate-500 py-8 text-center">
-          No state data matches the current filters.
+          No specialty data in the current filters.
         </p>
       )}
       {!loading && !error && data.length > 0 && (
@@ -46,18 +40,18 @@ export default function StateChart({ filters }) {
           <BarChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 48 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={t.grid} vertical={false} />
             <XAxis
-              dataKey="state"
+              dataKey="specialty"
               tick={{ fontSize: 11, fill: t.axisTextStrong }}
               interval={0}
-              angle={-45}
+              angle={-30}
               textAnchor="end"
-              height={70}
+              height={60}
               tickLine={false}
               axisLine={false}
             />
             <YAxis
               tick={{ fontSize: 11, fill: t.axisText }}
-              tickFormatter={(v) => formatCurrencyCompact(v)}
+              tickFormatter={(v) => formatNumber(v)}
               tickLine={false}
               axisLine={false}
             />
@@ -71,17 +65,17 @@ export default function StateChart({ filters }) {
               }}
               labelStyle={{ color: t.tooltipText }}
               formatter={(value, name, payload) => {
-                if (name === "total_claimed") {
-                  const n = payload?.payload?.claim_count;
+                if (name === "claim_count") {
+                  const total = payload?.payload?.total_claimed;
                   return [
-                    `${formatCurrencyCompact(value)}${n ? ` · ${formatNumber(n)} claims` : ""}`,
-                    "Claimed",
+                    `${formatNumber(value)} claims${total ? ` · ${formatCurrencyCompact(total)}` : ""}`,
+                    "Claims",
                   ];
                 }
                 return [value, name];
               }}
             />
-            <Bar dataKey="total_claimed" fill={t.purple} radius={[4, 4, 0, 0]} />
+            <Bar dataKey="claim_count" fill={t.teal} radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       )}

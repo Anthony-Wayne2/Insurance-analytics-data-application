@@ -6,10 +6,10 @@ import { api } from "../../api/client";
 import Card from "../ui/Card";
 import Spinner from "../ui/Spinner";
 import ErrorBanner from "../ui/ErrorBanner";
-import { formatCurrencyCompact, formatNumber } from "../ui/format";
+import { formatNumber } from "../ui/format";
 import { useChartTheme } from "../../hooks/useChartTheme";
 
-export default function StateChart({ filters }) {
+export default function AgeBandsChart({ filters }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -19,45 +19,35 @@ export default function StateChart({ filters }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    api.state(filters)
-      .then((rows) => {
-        if (cancelled) return;
-        const top10 = [...rows]
-          .sort((a, b) => (b.total_claimed || 0) - (a.total_claimed || 0))
-          .slice(0, 10);
-        setData(top10);
-      })
+    api.ageBands(filters)
+      .then((rows) => !cancelled && setData(rows))
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
     return () => { cancelled = true; };
   }, [filters]);
 
   return (
-    <Card title="Claims by State" subtitle="Top 10 states by total claimed value">
+    <Card title="Patients by Age Band" subtitle="Distinct patients with at least one claim in view">
       {loading && <Spinner />}
       {error && <ErrorBanner message={error} />}
       {!loading && !error && data.length === 0 && (
         <p className="text-sm text-slate-400 dark:text-slate-500 py-8 text-center">
-          No state data matches the current filters.
+          No patient activity in the current filters.
         </p>
       )}
       {!loading && !error && data.length > 0 && (
         <ResponsiveContainer width="100%" height={320}>
-          <BarChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 48 }}>
+          <BarChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 24 }}>
             <CartesianGrid strokeDasharray="3 3" stroke={t.grid} vertical={false} />
             <XAxis
-              dataKey="state"
-              tick={{ fontSize: 11, fill: t.axisTextStrong }}
-              interval={0}
-              angle={-45}
-              textAnchor="end"
-              height={70}
+              dataKey="age_band"
+              tick={{ fontSize: 12, fill: t.axisTextStrong }}
               tickLine={false}
               axisLine={false}
             />
             <YAxis
               tick={{ fontSize: 11, fill: t.axisText }}
-              tickFormatter={(v) => formatCurrencyCompact(v)}
+              tickFormatter={(v) => formatNumber(v)}
               tickLine={false}
               axisLine={false}
             />
@@ -70,18 +60,9 @@ export default function StateChart({ filters }) {
                 fontSize: 12,
               }}
               labelStyle={{ color: t.tooltipText }}
-              formatter={(value, name, payload) => {
-                if (name === "total_claimed") {
-                  const n = payload?.payload?.claim_count;
-                  return [
-                    `${formatCurrencyCompact(value)}${n ? ` · ${formatNumber(n)} claims` : ""}`,
-                    "Claimed",
-                  ];
-                }
-                return [value, name];
-              }}
+              formatter={(value) => [formatNumber(value), "Patients"]}
             />
-            <Bar dataKey="total_claimed" fill={t.purple} radius={[4, 4, 0, 0]} />
+            <Bar dataKey="patients" fill={t.amber} radius={[4, 4, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       )}

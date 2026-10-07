@@ -13,6 +13,7 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
+import threading
 
 
 # ------------------------------------------------------------------
@@ -66,7 +67,7 @@ def get_engine() -> Engine:
     global _engine
     if _engine is None:
         with _engine_lock:
-            if _engine is None:              # double-checked locking
+            if _engine is None:      # double-checked locking
                 _engine = create_engine(
                     _build_url(),
                     pool_size=5,

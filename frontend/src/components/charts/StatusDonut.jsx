@@ -1,47 +1,39 @@
 import { useEffect, useState } from "react";
 import {
-  ResponsiveContainer,
-  PieChart,
-  Pie,
-  Cell,
-  Tooltip,
-  Legend,
+  ResponsiveContainer, PieChart, Pie, Cell, Tooltip, Legend,
 } from "recharts";
 import { api } from "../../api/client";
 import Card from "../ui/Card";
 import Spinner from "../ui/Spinner";
 import ErrorBanner from "../ui/ErrorBanner";
 import { formatNumber, formatCurrencyCompact } from "../ui/format";
-
-const COLORS = {
-  Approved: "#10b981", // emerald
-  Pending:  "#f59e0b", // amber
-  Rejected: "#ef4444", // red
-};
-const FALLBACK = ["#0ea5e9", "#8b5cf6", "#f97316", "#14b8a6"];
+import { useChartTheme } from "../../hooks/useChartTheme";
 
 export default function StatusDonut({ filters }) {
   const [data, setData] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const t = useChartTheme();
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-
-    api
-      .status(filters)
+    api.status(filters)
       .then((rows) => !cancelled && setData(rows))
       .catch((e) => !cancelled && setError(e.message))
       .finally(() => !cancelled && setLoading(false));
-
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [filters]);
 
-  const total = data.reduce((sum, r) => sum + (r.n || 0), 0);
+  const colorFor = (status) => {
+    if (status === "Approved") return t.emerald;
+    if (status === "Pending") return t.amber;
+    if (status === "Rejected") return t.rose;
+    return t.sky;
+  };
+
+  const total = data.reduce((s, r) => s + (r.n || 0), 0);
 
   return (
     <Card
@@ -51,7 +43,7 @@ export default function StatusDonut({ filters }) {
       {loading && <Spinner />}
       {error && <ErrorBanner message={error} />}
       {!loading && !error && data.length === 0 && (
-        <p className="text-sm text-slate-400 py-8 text-center">
+        <p className="text-sm text-slate-400 dark:text-slate-500 py-8 text-center">
           No claims match the current filters.
         </p>
       )}
@@ -68,23 +60,21 @@ export default function StatusDonut({ filters }) {
               outerRadius={100}
               paddingAngle={2}
             >
-              {data.map((entry, idx) => (
-                <Cell
-                  key={entry.status}
-                  fill={COLORS[entry.status] || FALLBACK[idx % FALLBACK.length]}
-                />
+              {data.map((entry) => (
+                <Cell key={entry.status} fill={colorFor(entry.status)} />
               ))}
             </Pie>
             <Tooltip
               contentStyle={{
+                backgroundColor: t.tooltipBg,
+                border: `1px solid ${t.tooltipBorder}`,
+                color: t.tooltipText,
                 borderRadius: 8,
-                border: "1px solid #e2e8f0",
                 fontSize: 12,
               }}
+              labelStyle={{ color: t.tooltipText }}
               formatter={(value, name, payload) => [
-                `${formatNumber(value)} (${formatCurrencyCompact(
-                  payload?.payload?.value || 0
-                )})`,
+                `${formatNumber(value)} (${formatCurrencyCompact(payload?.payload?.value || 0)})`,
                 name,
               ]}
             />
@@ -92,7 +82,7 @@ export default function StatusDonut({ filters }) {
               verticalAlign="bottom"
               height={36}
               iconType="circle"
-              wrapperStyle={{ fontSize: 12 }}
+              wrapperStyle={{ fontSize: 12, color: t.axisText }}
             />
           </PieChart>
         </ResponsiveContainer>
