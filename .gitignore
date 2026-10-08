@@ -68,3 +68,4 @@ desktop.ini
 ~$*
 .env.aiven
 .env.aiven
+ca.pem
