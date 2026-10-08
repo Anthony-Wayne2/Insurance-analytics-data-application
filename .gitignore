@@ -66,3 +66,4 @@ desktop.ini
 *.tmp
 *.bak
 ~$*
+.env.aiven
