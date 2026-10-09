@@ -1,4 +1,12 @@
+# ---- Data ----
 numpy
 pandas
-sqlalchemy
+
+# ---- Database ----
+sqlalchemy>=2.0
 mysql-connector-python
+python-dotenv
+
+# ---- API ----
+fastapi>=0.115
+uvicorn[standard]>=0.32
