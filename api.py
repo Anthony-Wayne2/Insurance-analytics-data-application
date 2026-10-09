@@ -49,8 +49,9 @@ _cors_default = (
     "http://127.0.0.1:5173,"
     "http://127.0.0.1:4173"
 )
+
 cors_origins = [
-    o.strip()
+    o.strip().rstrip("/")
     for o in os.getenv("CORS_ORIGINS", _cors_default).split(",")
     if o.strip()
 ]
