@@ -1,18 +1,20 @@
 """
 api.py — Insurance Analytics Dashboard API
 ==========================================
-FastAPI backend serving all 25 KPIs as JSON endpoints.
+FastAPI backend serving all KPIs as JSON endpoints.
 
 Features:
   - Verified SQL from analytics_queries.sql
   - In-memory TTL cache (60s default) to keep the dashboard < 3s
-  - CORS enabled for the React dev server
+  - CORS configurable via CORS_ORIGINS env var (comma-separated)
   - Automatic OpenAPI docs at /docs
-
+  - /api/health for liveness + DB connectivity check
+  - /metrics stub to silence monitoring probes
 """
 
 import hashlib
 import json
+import os
 import time
 from datetime import date
 from typing import Optional
@@ -34,16 +36,25 @@ app = FastAPI(
     description="JSON API powering the Insurance Analytics Dashboard",
 )
 
+
+# ==================================================================
+# CORS — configurable via env var, with sensible local defaults
+# ==================================================================
+_cors_default = (
+    "http://localhost:5173,"
+    "http://localhost:4173,"
+    "http://127.0.0.1:5173,"
+    "http://127.0.0.1:4173"
+)
+cors_origins = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGINS", _cors_default).split(",")
+    if o.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",   # Vite default
-        "http://localhost:3000",   # CRA default
-        "http://127.0.0.1:5173",
-	"http://127.0.0.1:3000",
-	"http://localhost:4173",
-	"http://127.0.0.1:4173",
-    ],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -58,7 +69,6 @@ CACHE_TTL = 60          # seconds
 
 
 def _cache_key(sql: str, params: dict) -> str:
-    """Deterministic key from SQL + params."""
     raw = sql + json.dumps(params, sort_keys=True, default=str)
     return hashlib.md5(raw.encode()).hexdigest()
 
@@ -78,14 +88,9 @@ def _run_query(sql: str, params: dict, ttl: int = CACHE_TTL) -> list[dict]:
     try:
         with engine.connect() as conn:
             df = pd.read_sql(text(sql), conn, params=params)
+        # Convert NaN to None and strip numpy scalar types
         df = df.where(pd.notnull(df), None)
-        # Convert numpy scalars to plain Python types
-        for col in df.columns:
-            if pd.api.types.is_numeric_dtype(df[col]):
-                df[col] = df[col].astype(object)
-        result = df.to_dict(orient="records")
-        # Round-trip to strip remaining numpy types
-        result = json.loads(json.dumps(result, default=str))
+        result = json.loads(json.dumps(df.to_dict(orient="records"), default=str))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Query failed: {e}")
 
@@ -100,9 +105,34 @@ def _date_params(start_date: Optional[date], end_date: Optional[date]) -> dict:
     }
 
 
+# ==================================================================
+# HEALTH + ADMIN
+# ==================================================================
+@app.get("/", tags=["health"])
+def root():
+    return {"service": "Insurance Analytics API", "status": "ok"}
+
+
+@app.get("/api/health", tags=["health"])
+def health():
+    """Liveness + DB connectivity check."""
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            conn.execute(text("SELECT 1"))
+        return {"db": "ok"}
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"DB unavailable: {e}")
+
+
+@app.get("/metrics", include_in_schema=False)
+def metrics_stub():
+    """Silences common monitoring probes looking for Prometheus metrics."""
+    return {"note": "no metrics collector configured"}
+
+
 @app.get("/api/cache/clear", tags=["admin"])
 def cache_clear():
-    """Drop the entire cache (useful after an ETL refresh)."""
     n = len(_cache)
     _cache.clear()
     return {"cleared": n}
@@ -115,25 +145,6 @@ def cache_stats():
         "ttl_seconds": CACHE_TTL,
         "keys": list(_cache.keys())[:10],
     }
-
-
-# ==================================================================
-# ROOT
-# ==================================================================
-@app.get("/", tags=["health"])
-def root():
-    return {"service": "Insurance Analytics API", "status": "ok"}
-
-
-@app.get("/api/health", tags=["health"])
-def health():
-    try:
-        engine = get_engine()
-        with engine.connect() as conn:
-            conn.execute(text("SELECT 1"))
-        return {"db": "ok"}
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"DB unavailable: {e}")
 
 
 # ==================================================================
@@ -180,17 +191,17 @@ def kpi_payments(
           AND (:end_date   IS NULL OR claim_date <= :end_date)
     """
     p = _date_params(start_date, end_date)
-    paid    = _run_query(paid_sql, p)[0]
+    paid = _run_query(paid_sql, p)[0]
     claimed = _run_query(claimed_sql, p)[0]
 
     total_claimed = claimed["total_claimed"] or 0
-    total_paid    = paid["total_paid"] or 0
+    total_paid = paid["total_paid"] or 0
     ratio = round((total_paid / total_claimed * 100), 2) if total_claimed else 0
 
     return {
-        "total_paid":         total_paid,
+        "total_paid": paid["total_paid"],
         "avg_payment_amount": paid["avg_payment_amount"],
-        "payment_ratio":      ratio,
+        "payment_ratio": ratio,
     }
 
 
@@ -332,10 +343,13 @@ def chart_top_providers(
 
 
 # ==================================================================
-# KPI 12 — Claims by specialty
+# KPI 12 — Claims by specialty (filter-aware)
 # ==================================================================
 @app.get("/api/charts/specialty", tags=["charts"])
-def chart_specialty():
+def chart_specialty(
+    start_date: Optional[date] = Query(None),
+    end_date:   Optional[date] = Query(None),
+):
     sql = """
         SELECT
           p.specialty,
@@ -344,10 +358,12 @@ def chart_specialty():
           ROUND(COALESCE(AVG(c.claim_amount), 0), 2) AS avg_claim_amount
         FROM claims c
         JOIN providers p ON c.provider_id = p.provider_id
+        WHERE (:start_date IS NULL OR c.claim_date >= :start_date)
+          AND (:end_date   IS NULL OR c.claim_date <= :end_date)
         GROUP BY p.specialty
         ORDER BY claim_count DESC
     """
-    return _run_query(sql, {})
+    return _run_query(sql, _date_params(start_date, end_date))
 
 
 # ==================================================================
@@ -454,26 +470,34 @@ def chart_top_patients(limit: int = Query(10, ge=1, le=50)):
 
 
 # ==================================================================
-# KPI 21 — Age band distribution
+# KPI 21 — Age band distribution (filter-aware)
 # ==================================================================
 @app.get("/api/charts/age-bands", tags=["charts"])
-def chart_age_bands():
+def chart_age_bands(
+    start_date: Optional[date] = Query(None),
+    end_date:   Optional[date] = Query(None),
+):
+    # Only count patients who filed at least one claim in the window.
+    # COUNT(DISTINCT) prevents double-counting patients with multiple claims.
     sql = """
         SELECT
           CASE
-            WHEN age < 18 THEN '0-17'
-            WHEN age < 35 THEN '18-34'
-            WHEN age < 50 THEN '35-49'
-            WHEN age < 65 THEN '50-64'
-            WHEN age < 80 THEN '65-79'
+            WHEN pa.age < 18 THEN '0-17'
+            WHEN pa.age < 35 THEN '18-34'
+            WHEN pa.age < 50 THEN '35-49'
+            WHEN pa.age < 65 THEN '50-64'
+            WHEN pa.age < 80 THEN '65-79'
             ELSE '80+'
-          END     AS age_band,
-          COUNT(*) AS patients
-        FROM patients
+          END      AS age_band,
+          COUNT(DISTINCT pa.patient_id) AS patients
+        FROM claims c
+        JOIN patients pa ON c.patient_id = pa.patient_id
+        WHERE (:start_date IS NULL OR c.claim_date >= :start_date)
+          AND (:end_date   IS NULL OR c.claim_date <= :end_date)
         GROUP BY age_band
         ORDER BY age_band
     """
-    return _run_query(sql, {})
+    return _run_query(sql, _date_params(start_date, end_date))
 
 
 # ==================================================================
@@ -554,7 +578,7 @@ def chart_paid_vs_unpaid():
 
 
 # ==================================================================
-# Filter helpers — populate dropdowns
+# Filters — populate dropdowns
 # ==================================================================
 @app.get("/api/filters/states", tags=["filters"])
 def filter_states():
@@ -575,40 +599,26 @@ def filter_specialties():
 
 
 # ==================================================================
-# Meta — list all endpoints (for the frontend dev console)
+# Meta
 # ==================================================================
 @app.get("/api/meta/endpoints", tags=["meta"])
 def meta_endpoints():
     return {
         "kpis": [
-            "/api/kpis/claims",
-            "/api/kpis/payments",
-            "/api/kpis/rates",
-            "/api/kpis/pending",
-            "/api/kpis/patients",
-            "/api/kpis/payment-lag",
+            "/api/kpis/claims", "/api/kpis/payments", "/api/kpis/rates",
+            "/api/kpis/pending", "/api/kpis/patients", "/api/kpis/payment-lag",
         ],
         "charts": [
-            "/api/charts/monthly-claims",
-            "/api/charts/mom-growth",
-            "/api/charts/status",
-            "/api/charts/top-providers",
-            "/api/charts/specialty",
-            "/api/charts/providers-per-state",
-            "/api/charts/state",
-            "/api/charts/top-payout-states",
-            "/api/charts/top-patients",
-            "/api/charts/age-bands",
-            "/api/charts/payment-lag-histogram",
-            "/api/charts/paid-vs-unpaid",
+            "/api/charts/monthly-claims", "/api/charts/mom-growth",
+            "/api/charts/status", "/api/charts/top-providers",
+            "/api/charts/specialty", "/api/charts/providers-per-state",
+            "/api/charts/state", "/api/charts/top-payout-states",
+            "/api/charts/top-patients", "/api/charts/age-bands",
+            "/api/charts/payment-lag-histogram", "/api/charts/paid-vs-unpaid",
         ],
         "filters": [
-            "/api/filters/states",
-            "/api/filters/statuses",
-            "/api/filters/specialties",
+            "/api/filters/states", "/api/filters/statuses", "/api/filters/specialties",
         ],
-        "admin": [
-            "/api/cache/clear",
-            "/api/cache/stats",
-        ],
+        "admin": ["/api/cache/clear", "/api/cache/stats"],
+        "health": ["/api/health"],
     }
