@@ -63,6 +63,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Print the actual origins at boot for debugging
+print("=" * 60, flush=True)
+print(f"CORS origins loaded: {cors_origins}", flush=True)
+print("=" * 60, flush=True)
 
 # ==================================================================
 # CACHE — simple in-memory TTL cache
