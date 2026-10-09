@@ -25,7 +25,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from connection_db import get_engine
+import traceback
+import logging
 
+logger = logging.getLogger("uvicorn.error")
 
 # ==================================================================
 # APP SETUP
@@ -115,14 +118,23 @@ def root():
 
 @app.get("/api/health", tags=["health"])
 def health():
-    """Liveness + DB connectivity check."""
+    """Liveness + DB connectivity check with full error logging."""
     try:
         engine = get_engine()
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
         return {"db": "ok"}
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"DB unavailable: {e}")
+        # Print full traceback to stdout for Render's log panel
+        print("=" * 60, flush=True)
+        print("HEALTH CHECK FAILED", flush=True)
+        print("=" * 60, flush=True)
+        traceback.print_exc()
+        print("=" * 60, flush=True)
+        raise HTTPException(
+            status_code=503,
+            detail=f"DB unavailable: {type(e).__name__}: {e}"
+        )
 
 
 @app.get("/metrics", include_in_schema=False)
