@@ -6,7 +6,9 @@ Features:
   - Reads credentials from .env via python-dotenv
   - URL-encodes user/password to handle special characters
   - Supports both local MySQL (no SSL) and cloud MySQL (Aiven, SSL)
-  - Accepts DB_SSL_CA as either a file path or raw PEM contents
+  - Accepts DB_SSL_CA as either a file path OR raw PEM contents.
+    When PEM contents are given, they are written to a temp file so
+    the mysql-connector can open them by path.
   - Thread-safe singleton engine (double-checked locking)
   - Diagnostic helpers: test_connection(), list_tables()
 """
@@ -14,6 +16,7 @@ Features:
 import os
 import sys
 import logging
+import tempfile
 import threading
 from urllib.parse import quote_plus
 
@@ -46,6 +49,57 @@ load_dotenv(ENV_PATH)
 
 
 # ------------------------------------------------------------------
+# CA certificate handling — write PEM to a temp file if needed
+# ------------------------------------------------------------------
+_ca_temp_path: str | None = None
+
+
+def _resolve_ca_path(ca_value: str) -> str | None:
+    """
+    Given DB_SSL_CA (either a filesystem path or raw PEM contents),
+    return a filesystem path the mysql-connector can use.
+
+    - If it looks like a path and the file exists, return it.
+    - If it looks like PEM contents, write to a temp file and return that.
+    """
+    global _ca_temp_path
+
+    if not ca_value:
+        return None
+
+    ca_value = ca_value.strip()
+
+    # Case 1: it's already a path to an existing file
+    if not ca_value.startswith("-----BEGIN"):
+        if os.path.exists(ca_value):
+            logger.info("Using CA cert from file: %s", ca_value)
+            return ca_value
+        logger.warning("DB_SSL_CA does not exist as a file: %s", ca_value)
+        return None
+
+    # Case 2: it's raw PEM contents — write to a temp file
+    if _ca_temp_path and os.path.exists(_ca_temp_path):
+        return _ca_temp_path
+
+    fd, temp_path = tempfile.mkstemp(prefix="aiven_ca_", suffix=".pem")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(ca_value)
+            if not ca_value.endswith("\n"):
+                f.write("\n")
+        _ca_temp_path = temp_path
+        logger.info("Wrote CA cert to temp file: %s", temp_path)
+        return temp_path
+    except Exception as e:
+        logger.error("Failed to write CA cert to temp file: %s", e)
+        try:
+            os.unlink(temp_path)
+        except Exception:
+            pass
+        return None
+
+
+# ------------------------------------------------------------------
 # Build URL — no query string; SSL handled via connect_args
 # ------------------------------------------------------------------
 def _build_url() -> str:
@@ -61,7 +115,6 @@ def _build_url() -> str:
             f"or that DB_PASSWORD is set as an environment variable."
         )
 
-    # URL-encode both user and password so special characters (@ : / ? #) are safe
     user_enc = quote_plus(user)
     pwd_enc  = quote_plus(pwd)
 
@@ -73,7 +126,7 @@ def _build_url() -> str:
 # ------------------------------------------------------------------
 def _build_connect_args() -> dict:
     """
-    Returns a dict of driver-specific connection arguments.
+    Returns driver-specific connection arguments.
 
     Local dev:      DB_SSL unset / 'disabled'  → SSL off
     Aiven / cloud:  DB_SSL=required + DB_SSL_CA=<PEM path or contents>
@@ -84,21 +137,14 @@ def _build_connect_args() -> dict:
         connect_args = {
             "ssl_disabled": False,
             "auth_plugin": "mysql_native_password",
-            "ssl_verify_cert": True,
         }
 
-        ca_value = os.getenv("DB_SSL_CA", "").strip()
-        if ca_value:
-            # Accept EITHER a file path OR the raw PEM contents.
-            # Render injects the cert as an environment variable, so the
-            # PEM-contents branch is what makes the cloud deployment work.
-            if ca_value.startswith("-----BEGIN"):
-                connect_args["ssl_ca"] = ca_value
-            elif os.path.exists(ca_value):
-                connect_args["ssl_ca"] = ca_value
-            # else: silently skip — connector may still succeed with system CAs
+        ca_value = os.getenv("DB_SSL_CA", "")
+        ca_path = _resolve_ca_path(ca_value)
+        if ca_path:
+            connect_args["ssl_ca"] = ca_path
 
-        logger.info("SSL: enabled (verify_cert=True)")
+        logger.info("SSL: enabled (ca=%s)", "yes" if ca_path else "no")
     else:
         connect_args = {
             "ssl_disabled": True,
@@ -149,7 +195,7 @@ def get_engine() -> Engine:
 # Diagnostics
 # ------------------------------------------------------------------
 def test_connection() -> bool:
-    """Print a short report. Raise on failure."""
+    """Print a short report. Return True/False."""
     try:
         with get_engine().connect() as conn:
             version = conn.execute(text("SELECT VERSION();")).scalar()
